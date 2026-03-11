@@ -39,7 +39,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       etcd:
-        image: bitnami/etcd:3.5
+        image: bitnami/etcd:3.5.12
         env:
           ALLOW_NONE_AUTHENTICATION: "yes"
         ports:
