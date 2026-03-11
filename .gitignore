@@ -1,0 +1,8 @@
+bin/
+coverage.out
+*.pb.go
+*.pb.gw.go
+/certs/dev/
+.env
+*.local
+vendor/

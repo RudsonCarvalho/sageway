@@ -1,0 +1,57 @@
+linters:
+  enable:
+    - errcheck
+    - gosec
+    - govet
+    - staticcheck
+    - revive
+    - gocyclo
+    - funlen
+    - godot
+    - noctx
+    - bodyclose
+    - exhaustive
+    - forbidigo
+    - gocritic
+    - tparallel
+
+linters-settings:
+  gocyclo:
+    min-complexity: 10
+  funlen:
+    lines: 40
+  forbidigo:
+    forbid:
+      - p: 'fmt\.Println'
+        msg: "use structured zerolog logging"
+      - p: 'fmt\.Print\b'
+        msg: "use structured zerolog logging"
+      - p: '^log\.Fatal'
+        msg: "use zerolog; log.Fatal is the stdlib logger"
+      - p: 'panic\('
+        msg: "panic is only permitted in cmd/*/main.go for unrecoverable startup failures"
+  godot:
+    scope: toplevel
+    capital: false
+  revive:
+    rules:
+      - name: exported
+        arguments:
+          - "checkPrivateReceivers"
+      - name: var-naming
+      - name: error-strings
+
+issues:
+  exclude-rules:
+    - path: 'cmd/.*/main\.go'
+      linters:
+        - forbidigo
+      text: 'panic'
+    - path: 'cmd/.*/main\.go'
+      linters:
+        - forbidigo
+      text: 'os\.Exit'
+    - path: '_test\.go'
+      linters:
+        - funlen
+        - gocyclo

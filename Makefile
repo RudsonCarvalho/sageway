@@ -1,46 +1,39 @@
 .PHONY: all build test lint bench proto docker dev clean
 
+GOFLAGS := -race -count=1
+COVERAGE_OUT := coverage.out
+COVERAGE_THRESHOLD := 90
+
 all: lint test build
 
-# ── Build ──────────────────────────────────────────────────────────────────
 build:
 	go build -o bin/gateway ./cmd/gateway
 	go build -o bin/orchestrator ./cmd/orchestrator
 
-# ── Test ───────────────────────────────────────────────────────────────────
 test:
-	go test ./... -race -count=1 -coverprofile=coverage.out -timeout 5m
-	go tool cover -func=coverage.out
+	go test ./... $(GOFLAGS) -coverprofile=$(COVERAGE_OUT)
+	go tool cover -func=$(COVERAGE_OUT)
 
-# ── Lint ───────────────────────────────────────────────────────────────────
 lint:
 	golangci-lint run ./...
 
-# ── Benchmarks ─────────────────────────────────────────────────────────────
 bench:
 	go test ./... -bench=. -benchmem -benchtime=10s -run='^$$'
 
-# ── Protobuf ───────────────────────────────────────────────────────────────
 proto:
-	protoc \
-		--go_out=. \
-		--go_opt=paths=source_relative \
-		--go-grpc_out=. \
-		--go-grpc_opt=paths=source_relative \
-		proto/l2/v1/l2_messages.proto
+	protoc --go_out=. --go-grpc_out=. proto/l2/v1/l2_messages.proto
 
-# ── Docker ─────────────────────────────────────────────────────────────────
 docker:
-	docker build -f deployments/Dockerfile.gateway -t sageway-gateway:dev .
-	docker build -f deployments/Dockerfile.orchestrator -t sageway-orchestrator:dev .
+	docker build -f deployments/Dockerfile.gateway -t aasg-gateway:dev .
+	docker build -f deployments/Dockerfile.orchestrator -t aasg-orchestrator:dev .
 
-# ── Dev (local stack) ──────────────────────────────────────────────────────
 dev:
-	docker compose -f deployments/docker-compose.yml up -d
+	docker-compose -f deployments/docker-compose.yml up -d etcd elasticsearch opa
 	go run ./cmd/orchestrator &
 	go run ./cmd/gateway
 
-# ── Clean ──────────────────────────────────────────────────────────────────
 clean:
-	rm -rf bin/ coverage.out
-	docker compose -f deployments/docker-compose.yml down
+	rm -f bin/gateway bin/orchestrator $(COVERAGE_OUT)
+
+coverage-check:
+	@go tool cover -func=$(COVERAGE_OUT) | awk '/total:/{if ($$3+0 < $(COVERAGE_THRESHOLD)) {print "FAIL: coverage " $$3 " < $(COVERAGE_THRESHOLD)%"; exit 1}}'
