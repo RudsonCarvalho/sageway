@@ -1,0 +1,130 @@
+// Proto definitions for the AASG L2 Control Plane protocol (Spec s5.7).
+// All messages exchanged on the Control Plane use the L2Envelope wrapper.
+// The payload field carries the proto-serialized message for each MsgType.
+syntax = "proto3";
+
+package aasg.l2.v1;
+
+option go_package = "github.com/RudsonCarvalho/sageway/proto/l2/v1;l2v1";
+
+// MsgType identifies the type of message carried in an L2Envelope.
+enum MsgType {
+  HEARTBEAT      = 0;
+  CHALLENGE      = 1;
+  CHALLENGE_RESP = 2;
+  STATE_SYNC     = 3;
+  POLICY_UPDATE  = 4;
+  POLICY_ACK     = 5;
+  QUARANTINE_CMD = 6;
+  QUARANTINE_ACK = 7;
+  METRIC_REPORT  = 8;
+}
+
+// OperationalState is the self-reported health state of the AASG (Spec s5.7).
+enum OperationalState {
+  HEALTHY       = 0;
+  DEGRADED      = 1;
+  CRITICAL      = 2;
+  SHUTTING_DOWN = 3;
+}
+
+// L2Envelope is the outer wrapper for all Control Plane messages.
+// The HMAC field covers fields 1-5 (all fields except hmac itself).
+// seq_num must be monotonically increasing per session and is persisted in etcd.
+message L2Envelope {
+  string  msg_id    = 1; // UUIDv4 -- unique per message, for deduplication
+  int64   timestamp = 2; // epoch milliseconds -- used for clock drift detection
+  uint64  seq_num   = 3; // monotonic counter -- persisted in etcd for replay protection
+  MsgType msg_type  = 4; // identifies the payload type
+  bytes   payload   = 5; // proto-serialized payload for this MsgType
+  bytes   hmac      = 6; // HMAC-SHA256(fields 1-5, session_key) -- constant-time verified
+}
+
+// HeartbeatPayload is the payload for HEARTBEAT messages (MsgType=0).
+// Published by the AASG every T_hb seconds.
+message HeartbeatPayload {
+  OperationalState state         = 1; // self-reported health state
+  string           policy_digest = 2; // SHA-256 of the active OPA policy bundle
+  uint64           blocked_reqs  = 3; // requests blocked since last heartbeat
+  uint64           anomalies     = 4; // anomaly events since last heartbeat
+  uint64           reauths       = 5; // re-authentication events since last heartbeat
+}
+
+// ChallengePayload is the payload for CHALLENGE messages (MsgType=1).
+// Sent by the Orchestrator when the AASG transitions to STALE.
+message ChallengePayload {
+  bytes nonce = 1; // 32 cryptographically random bytes (crypto/rand)
+}
+
+// ChallengeRespPayload is the payload for CHALLENGE_RESP messages (MsgType=2).
+// The AASG must respond within T_probe seconds.
+message ChallengeRespPayload {
+  bytes hmac_resp = 1; // HMAC-SHA256(nonce, session_key) -- proves liveness
+}
+
+// StateSyncPayload is the payload for STATE_SYNC messages (MsgType=3).
+// Sent by the Orchestrator to push state corrections to the AASG.
+message StateSyncPayload {
+  string agent_id        = 1;
+  string policy_version  = 2;
+  int64  last_heartbeat  = 3; // epoch ms of last received heartbeat
+}
+
+// PolicyUpdatePayload is the payload for POLICY_UPDATE messages (MsgType=4).
+// Sent by the Orchestrator to distribute a new OPA policy bundle.
+message PolicyUpdatePayload {
+  uint64 version = 1; // monotonically increasing policy version
+  bytes  bundle  = 2; // OPA policy bundle bytes
+  string digest  = 3; // SHA-256 of bundle -- verified before applying
+}
+
+// PolicyAckPayload is the payload for POLICY_ACK messages (MsgType=5).
+// Sent by the AASG in response to POLICY_UPDATE.
+message PolicyAckPayload {
+  uint64 version = 1; // echoes the version from PolicyUpdatePayload
+  bool   applied = 2; // true only if policy was successfully applied
+  string reason  = 3; // non-empty if applied=false, describes the failure
+}
+
+// QuarantineCmdPayload is the payload for QUARANTINE_CMD messages (MsgType=6).
+// Issued by the Orchestrator only after receiving two valid Ed25519 operator signatures.
+message QuarantineCmdPayload {
+  string reason      = 1; // human-readable reason for quarantine
+  string operator_id = 2; // ID of the initiating operator (first approver)
+}
+
+// QuarantineAckPayload is the payload for QUARANTINE_ACK messages (MsgType=7).
+// Sent by the AASG to confirm quarantine activation.
+message QuarantineAckPayload {
+  bool   activated = 1; // true if quarantine was successfully activated
+  string reason    = 2; // non-empty if activated=false
+}
+
+// MetricReportPayload is the payload for METRIC_REPORT messages (MsgType=8).
+// Periodic telemetry sent by the AASG to the Orchestrator.
+message MetricReportPayload {
+  uint64 total_requests   = 1;
+  uint64 blocked_requests = 2;
+  uint64 error_count      = 3;
+  double avg_latency_ms   = 4;
+  double p99_latency_ms   = 5;
+}
+
+// QuarantineApproval is submitted by each operator to POST /internal/v1/agents/{id}/quarantine.
+// The Orchestrator collects two distinct approvals before issuing QUARANTINE_CMD.
+// signature = Ed25519(agent_id || operator_id || reason || timestamp, operator_private_key).
+message QuarantineApproval {
+  string agent_id    = 1;
+  string operator_id = 2;
+  string reason      = 3;
+  int64  timestamp   = 4; // epoch ms -- used to reject stale approvals
+  bytes  signature   = 5; // Ed25519 signature over fields 1-4 serialized
+}
+
+// L2Service is the gRPC service for the Control Plane bidirectional stream (Spec s6.3).
+service L2Service {
+  // OpenStream establishes the bidirectional L2 Control Plane channel.
+  // The AASG sends L2Envelopes (heartbeats, responses); the Orchestrator sends commands.
+  // Authenticated with mTLS; SPIFFE IDs validated on both sides.
+  rpc OpenStream(stream L2Envelope) returns (stream L2Envelope);
+}
